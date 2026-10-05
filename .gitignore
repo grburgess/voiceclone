@@ -1,0 +1,16 @@
+# environments
+.venv/
+enhancers/
+engines/*/.venv/
+# third-party code + weights (install.sh fetches them)
+engines/*/src/
+engines/*/weights/
+checkpoints/
+# user data / runtime
+voices/
+outputs/
+*.wav
+*.log
+.ui.pid
+__pycache__/
+ca-bundle.pem

@@ -1,0 +1,3 @@
+Hello, this is a test of Chatterbox running locally.
+
+It splits paragraphs and stitches them together for video voiceovers.

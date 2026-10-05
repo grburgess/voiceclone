@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# voiceclone — CLI for the local voice-cloning TTS toolkit.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+ENGINES="$ROOT/engines"
+MODELS="chatterbox qwen3 voxcpm cosyvoice fish f5"
+PIDFILE="$ROOT/.ui.pid"
+
+usage() {
+  cat <<EOF
+voiceclone — local voice-cloning TTS ($ROOT)
+
+  voiceclone ui [--hours N]          start web UI in background (default 3h auto-stop), open browser
+  voiceclone stop                    stop the web UI
+  voiceclone say [opts] "text"       generate speech
+      -m MODEL   $MODELS (default qwen3)
+      -v VOICE   voice name in voices/ (default me)
+      -o OUT     output wav (default outputs/<time>_<model>.wav)
+      -f FILE    read text from FILE instead (blank line = new paragraph)
+      -s SEED    seed (default 1; 0 = random)
+      -p PAUSE   pause between paragraphs, seconds (default 0.4)
+  voiceclone voices                  list voices (* = has transcript)
+  voiceclone transcribe VOICE        (re)generate voices/VOICE.txt with Whisper
+  voiceclone install [targets]       run install.sh (all | main whisper qwen3 voxcpm cosyvoice fish f5 enhancers)
+EOF
+}
+
+transcribe() {
+  "$ENGINES/whisper/.venv/bin/python" "$ENGINES/whisper/run.py" --audio "$ROOT/voices/$1.wav" 2>/dev/null \
+    > "$ROOT/voices/$1.txt" && [ -s "$ROOT/voices/$1.txt" ] || { rm -f "$ROOT/voices/$1.txt"; echo "transcription failed" >&2; exit 1; }
+}
+
+cmd_ui() {
+  local hours=3
+  [ "${1:-}" = --hours ] && hours="$2"
+  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then echo "already running (pid $(cat "$PIDFILE"))"; else
+    cd "$ROOT"
+    nohup .venv/bin/python app.py > app.log 2>&1 &
+    local pid=$!; echo $pid > "$PIDFILE"
+    nohup sh -c "sleep $(echo "$hours*3600/1" | bc); kill $pid" >/dev/null 2>&1 &
+    echo "started pid $pid, auto-stops in ${hours}h"
+  fi
+  local pid port; pid=$(cat "$PIDFILE")
+  for _ in $(seq 120); do
+    port=$(lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{split($9,a,":");print a[2]}' | head -1 || true)
+    [ -n "$port" ] && break; kill -0 "$pid" 2>/dev/null || { echo "UI failed to start; see $ROOT/app.log"; exit 1; }; sleep 1
+  done
+  echo "http://127.0.0.1:$port"; open "http://127.0.0.1:$port"
+}
+
+cmd_stop() {
+  [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null && echo stopped || echo "not running"
+  rm -f "$PIDFILE"
+}
+
+cmd_say() {
+  local model=qwen3 voice=me out="" file="" seed=1 pause=0.4 words=()
+  while [ $# -gt 0 ]; do case $1 in  # options may come before or after the text
+    -m) model=$2; shift 2;; -v) voice=$2; shift 2;; -o) out=$2; shift 2;; -f) file=$2; shift 2;;
+    -s) seed=$2; shift 2;; -p) pause=$2; shift 2;; -*) usage; exit 1;; *) words+=("$1"); shift;; esac; done
+  set -- ${words[@]+"${words[@]}"}
+  [[ " $MODELS " == *" $model "* ]] || { echo "unknown model: $model ($MODELS)" >&2; exit 1; }
+  local ref="$ROOT/voices/$voice.wav"; [ -f "$ref" ] || { echo "no voice: $ref" >&2; exit 1; }
+  local tf; tf=$(mktemp)
+  if [ -n "$file" ]; then cp "$file" "$tf"; else [ $# -gt 0 ] || { usage; exit 1; }; printf '%s\n' "$*" > "$tf"; fi
+  out="${out:-$ROOT/outputs/$(date +%Y%m%d-%H%M%S)_${model}.wav}"
+  out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+  if [ "$model" = chatterbox ]; then
+    "$ROOT/.venv/bin/python" "$ROOT/tts.py" "$tf" -o "$out" --voice "$ref" --pause "$pause" >&2 2>/dev/null
+  else
+    [ -f "$ROOT/voices/$voice.txt" ] || transcribe "$voice"
+    (cd "$ENGINES/$model" && .venv/bin/python run.py --text-file "$tf" --ref "$ref" \
+      --ref-text "$(cat "$ROOT/voices/$voice.txt")" --out "$out" --pause "$pause" --seed "$seed" 2>/tmp/voiceclone.err) \
+      || { tail -3 /tmp/voiceclone.err >&2; exit 1; }
+  fi
+  echo "$out"
+}
+
+cmd_voices() {
+  for f in "$ROOT"/voices/*.wav; do n=$(basename "$f" .wav); [ -f "$ROOT/voices/$n.txt" ] && echo "* $n" || echo "  $n"; done
+}
+
+case "${1:-}" in
+  ui) shift; cmd_ui "$@";;
+  stop) cmd_stop;;
+  say) shift; cmd_say "$@";;
+  voices) cmd_voices;;
+  transcribe) transcribe "$2"; cat "$ROOT/voices/$2.txt";;
+  install) shift; "$ROOT/install.sh" "$@";;
+  *) usage;;
+esac
