@@ -17,14 +17,16 @@ logger.add(sys.stderr, level="ERROR")
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--text-file", required=True)
-    p.add_argument("--ref", required=True)
-    p.add_argument("--ref-text", required=True)
+    p.add_argument("--ref", required=True, action="append")  # repeat --ref/--ref-text per speaker (<|speaker:N|>)
+    p.add_argument("--ref-text", required=True, action="append")
     p.add_argument("--out", required=True)
     p.add_argument("--pause", type=float, default=0.4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--extra", default="{}")
     a = p.parse_args()
-    text_file, ref, out = (Path(x).expanduser().resolve() for x in (a.text_file, a.ref, a.out))
+    text_file, out, *ref_paths = (Path(x).expanduser().resolve() for x in (a.text_file, a.out, *a.ref))
+    if len(a.ref) != len(a.ref_text):
+        raise SystemExit("need one --ref-text per --ref")
     extra = json.loads(a.extra)
     os.chdir(HERE / "src")  # repo resolves configs relative to cwd
     real_stdout, sys.stdout = sys.stdout, sys.stderr  # repo prints prompts; keep stdout clean
@@ -48,7 +50,7 @@ def main():
     paras = [x.strip() for x in text_file.read_text().split("\n\n") if x.strip()]
     if not paras:
         raise SystemExit("empty text")
-    refs = [ServeReferenceAudio(audio=ref.read_bytes(), text=a.ref_text)]
+    refs = [ServeReferenceAudio(audio=r.read_bytes(), text=t) for r, t in zip(ref_paths, a.ref_text)]
     seed = a.seed if a.seed else random.randint(1, 2**31 - 1)
     sr, chunks = None, []
     for i, t in enumerate(paras):

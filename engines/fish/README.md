@@ -11,6 +11,10 @@
 Usage:
 `.venv/bin/python run.py --text-file T.txt --ref REF.wav --ref-text "..." --out OUT.wav [--pause 0.4] [--seed 0] [--extra '{"temperature":0.8}']`
 
+Multi-speaker: repeat `--ref R --ref-text T` per speaker; reference i is `<|speaker:i|>` in the text (`dialogue.py` writes these from `name: line` scripts). All speakers are generated in one pass per paragraph.
+
+Inline tags (passed through untouched; the model reads them): `[pause]` `[short pause]` `[emphasis]` `[sigh]` `[inhale]` `[exhale]` `[laughing]` `[chuckle]` `[whisper]` `[low voice]` `[excited]` `[surprised]` `[sad]` `[angry]` `[shouting]` `[volume up]` `[volume down]` `[clearing throat]` and free-form `[warm, like talking to an old friend]` (S2 claims 15k+ tags). Drama 3's word-scoped `<whisper>…</whisper>` is API-only, not S2.
+
 --seed 0 = random; paragraph i uses seed+i. Set FISH_TIMING=1 to print load/gen timing to stderr.
 
 --extra keys (ServeTTSRequest fields): temperature (0.8, 0.1–1.0), top_p (0.8, 0.1–1.0), repetition_penalty (1.1, 0.9–2.0), max_new_tokens (1024), chunk_length (200), normalize (true), device ("mps"/"cpu", consumed by loader).

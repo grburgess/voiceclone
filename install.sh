@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install voiceclone: venvs (pinned in requirements/), code checkouts, weights, CLI launcher.
-# Usage: ./install.sh [all | main whisper qwen3 voxcpm cosyvoice fish f5 enhancers]   (default: all)
+# Usage: ./install.sh [all | main whisper qwen3 voxcpm cosyvoice fish f5 autotag enhancers]   (default: all)
 # Needs: macOS arm64, uv, ffmpeg, git, git-lfs, and a network that can reach huggingface.co.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -73,6 +73,12 @@ install_f5() {
   weights engines/f5/weights/vocos https://huggingface.co/charactr/vocos-mel-24khz 0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21
 }
 
+install_autotag() {  # local LLM that adds fish performance tags to scripts
+  venv engines/autotag/.venv 3.11 autotag
+  weights engines/autotag/weights/qwen3-4b https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit \
+    50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b
+}
+
 install_enhancers() {
   venv enhancers/dfn 3.11 dfn
   venv enhancers/resemble 3.10 resemble
@@ -89,7 +95,7 @@ install_enhancers() {
 }
 
 targets=("$@"); [ ${#targets[@]} -eq 0 ] || [ "${targets[0]}" = all ] && \
-  targets=(main whisper qwen3 voxcpm cosyvoice fish f5 enhancers)
+  targets=(main whisper qwen3 voxcpm cosyvoice fish f5 autotag enhancers)
 [[ " ${targets[*]} " == *" main "* ]] || [ -x .venv/bin/python ] || targets=(main "${targets[@]}")
 
 mkdir -p voices outputs ~/.local/bin

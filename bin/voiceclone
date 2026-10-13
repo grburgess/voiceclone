@@ -19,9 +19,12 @@ voiceclone — local voice-cloning TTS ($ROOT)
       -f FILE    read text from FILE instead (blank line = new paragraph)
       -s SEED    seed (default 1; 0 = random)
       -p PAUSE   pause between paragraphs, seconds (default 0.4)
+      -n TAKES   generate N takes, keep the best (Whisper WER + speaker similarity; default 1)
+      fish: [sigh] [whisper] ... tags and "name: line" dialogue (name = voice in voices/) work in the text
+  voiceclone autotag FILE            print FILE with fish performance tags added by a local LLM
   voiceclone voices                  list voices (* = has transcript)
   voiceclone transcribe VOICE        (re)generate voices/VOICE.txt with Whisper
-  voiceclone install [targets]       run install.sh (all | main whisper qwen3 voxcpm cosyvoice fish f5 enhancers)
+  voiceclone install [targets]       run install.sh (all | main whisper qwen3 voxcpm cosyvoice fish f5 autotag enhancers)
 EOF
 }
 
@@ -54,10 +57,10 @@ cmd_stop() {
 }
 
 cmd_say() {
-  local model=qwen3 voice=me out="" file="" seed=1 pause=0.4 words=()
+  local model=qwen3 voice=me out="" file="" seed=1 pause=0.4 takes=1 words=()
   while [ $# -gt 0 ]; do case $1 in  # options may come before or after the text
     -m) model=$2; shift 2;; -v) voice=$2; shift 2;; -o) out=$2; shift 2;; -f) file=$2; shift 2;;
-    -s) seed=$2; shift 2;; -p) pause=$2; shift 2;; -*) usage; exit 1;; *) words+=("$1"); shift;; esac; done
+    -s) seed=$2; shift 2;; -p) pause=$2; shift 2;; -n) takes=$2; shift 2;; -*) usage; exit 1;; *) words+=("$1"); shift;; esac; done
   set -- ${words[@]+"${words[@]}"}
   [[ " $MODELS " == *" $model "* ]] || { echo "unknown model: $model ($MODELS)" >&2; exit 1; }
   local ref="$ROOT/voices/$voice.wav"; [ -f "$ref" ] || { echo "no voice: $ref" >&2; exit 1; }
@@ -65,13 +68,32 @@ cmd_say() {
   if [ -n "$file" ]; then cp "$file" "$tf"; else [ $# -gt 0 ] || { usage; exit 1; }; printf '%s\n' "$*" > "$tf"; fi
   out="${out:-$ROOT/outputs/$(date +%Y%m%d-%H%M%S)_${model}.wav}"
   out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
-  if [ "$model" = chatterbox ]; then
-    "$ROOT/.venv/bin/python" "$ROOT/tts.py" "$tf" -o "$out" --voice "$ref" --pause "$pause" >&2 2>/dev/null
-  else
-    [ -f "$ROOT/voices/$voice.txt" ] || transcribe "$voice"
-    (cd "$ENGINES/$model" && .venv/bin/python run.py --text-file "$tf" --ref "$ref" \
-      --ref-text "$(cat "$ROOT/voices/$voice.txt")" --out "$out" --pause "$pause" --seed "$seed" 2>/tmp/voiceclone.err) \
-      || { tail -3 /tmp/voiceclone.err >&2; exit 1; }
+  local refs=(--ref "$ref") rank_ref=(--ref "$ref") speakers=()
+  if [ "$model" = fish ]; then  # "name: line" dialogue -> one reference per speaker
+    speakers=($("$ROOT/.venv/bin/python" "$ROOT/dialogue.py" "$tf" "$ROOT/voices"))
+    [ ${#speakers[@]} -gt 0 ] && refs=() rank_ref=()
+    for v in ${speakers[@]+"${speakers[@]}"}; do refs+=(--ref "$ROOT/voices/$v.wav"); done
+  fi
+  local list=(${speakers[@]+"${speakers[@]}"}); [ ${#list[@]} -gt 0 ] || list=("$voice")
+  if [ "$model" != chatterbox ]; then
+    for v in "${list[@]}"; do [ -f "$ROOT/voices/$v.txt" ] || transcribe "$v"; refs+=(--ref-text "$(cat "$ROOT/voices/$v.txt")"); done
+  fi
+  local all=() k s
+  for ((k = 0; k < takes; k++)); do
+    local o="$out"; [ "$takes" -gt 1 ] && o="${out%.wav}_take$k.wav"
+    s=$seed; [ "$seed" -gt 0 ] && s=$((seed + k))
+    if [ "$model" = chatterbox ]; then
+      "$ROOT/.venv/bin/python" "$ROOT/tts.py" "$tf" -o "$o" --voice "$ref" --pause "$pause" >&2 2>/dev/null
+    else
+      (cd "$ENGINES/$model" && .venv/bin/python run.py --text-file "$tf" "${refs[@]}" \
+        --out "$o" --pause "$pause" --seed "$s" 2>/tmp/voiceclone.err) \
+        || { tail -3 /tmp/voiceclone.err >&2; exit 1; }
+    fi
+    all+=("$o")
+  done
+  if [ "$takes" -gt 1 ]; then  # best take becomes $out; the others stay as _takeK.wav
+    local best; best=$("$ROOT/.venv/bin/python" "$ROOT/rank.py" --text-file "$tf" ${rank_ref[@]+"${rank_ref[@]}"} "${all[@]}")
+    mv "$best" "$out"
   fi
   echo "$out"
 }
@@ -86,6 +108,7 @@ case "${1:-}" in
   say) shift; cmd_say "$@";;
   voices) cmd_voices;;
   transcribe) transcribe "$2"; cat "$ROOT/voices/$2.txt";;
+  autotag) "$ENGINES/autotag/.venv/bin/python" "$ENGINES/autotag/run.py" --text-file "$2";;
   install) shift; "$ROOT/install.sh" "$@";;
   *) usage;;
 esac
